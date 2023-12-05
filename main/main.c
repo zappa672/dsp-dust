@@ -23,25 +23,35 @@
 // #define BUTTONS_TASK_STACK_SIZE     2048
 // #define BUF_SIZE (1024)
 
-#define LED_STRIP_GPIO              17
+#define LED_MATRIX_GPIO              17
+#define LED_MATRIX_WIDTH             16
+#define LED_MATRIX_HEIGHT            8
+#define LED_MATRIX_RMT_RESOLUTION_HZ 10 * 1000 * 1000 // 10MHz
 
-#define MIC_ADC_READ_LEN            256
-#define MIC_ADC_ATTEN               ADC_ATTEN_DB_11
-#define MIC_ADC_UNIT                ADC_UNIT_1
-#define MIC_ADC_CHANNEL             ADC_CHANNEL_7 // GPIO35
-#define MIC_ADC_BIT_WIDTH           SOC_ADC_DIGI_MAX_BITWIDTH
-#define MIC_ADC_CONV_MODE           ADC_CONV_SINGLE_UNIT_1
-#define MIC_ADC_OUTPUT_TYPE         ADC_DIGI_OUTPUT_FORMAT_TYPE1
-#define MIC_TASK_STACK_SIZE         8096
-#define MIC_ADC_SAMPLING_FREQUENCY  40*1000 // 40kHz
+#define MIC_TASK_STACK_SIZE          8096
+#define MIC_ADC_READ_LEN             256
+#define MIC_ADC_ATTEN                ADC_ATTEN_DB_11
+#define MIC_ADC_UNIT                 ADC_UNIT_1
+#define MIC_ADC_CHANNEL              ADC_CHANNEL_7 // GPIO35
+#define MIC_ADC_BIT_WIDTH            SOC_ADC_DIGI_MAX_BITWIDTH
+#define MIC_ADC_CONV_MODE            ADC_CONV_SINGLE_UNIT_1
+#define MIC_ADC_OUTPUT_TYPE          ADC_DIGI_OUTPUT_FORMAT_TYPE1
+#define MIC_ADC_SAMPLING_FREQUENCY   20*1000 // 20kHz
 
-#define FFT_STACK_SIZE              8096
-
+#define FFT_STACK_SIZE               8096
+#define FFT_SMOOTHING_DEPTH          4
 
 static const char *TAG = "dsp-dust";
 
 // static int current_mode = 0;
 
+typedef struct color {
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue; 
+} color_t;
+
+static color_t cur_pattern[LED_MATRIX_HEIGHT];
 static led_strip_handle_t led_strip;
 
 static adc_continuous_handle_t mic_adc_cont_handle;
@@ -56,9 +66,6 @@ float window[MIC_ADC_READ_LEN];
 __attribute__((aligned(16)))
 float y_cf[2*MIC_ADC_READ_LEN];
 
-// void configure_buttons(void) {
-
-// }
 
 // static void buttons_read_task(void *arg)
 // {
@@ -96,41 +103,55 @@ float y_cf[2*MIC_ADC_READ_LEN];
 
 void configure_led(void) {
     led_strip_config_t strip_config = {
-        .strip_gpio_num = LED_STRIP_GPIO,
-        .max_leds = 16*8,
+        .strip_gpio_num = LED_MATRIX_GPIO,
+        .max_leds = LED_MATRIX_WIDTH*LED_MATRIX_HEIGHT,
     };
 
     led_strip_rmt_config_t rmt_config = {
-        .resolution_hz = 10 * 1000 * 1000, // 10MHz
+        .resolution_hz = LED_MATRIX_RMT_RESOLUTION_HZ, // 10MHz
         .flags.with_dma = false,
     };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
+
+    ESP_ERROR_CHECK(
+        led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip)
+    );
+
+    for (int row = 0; row < LED_MATRIX_HEIGHT; row++) {
+        if (row < LED_MATRIX_HEIGHT / 2) {
+            cur_pattern[row].red = 1;
+            cur_pattern[row].green = 4;
+            cur_pattern[row].blue = 1;
+        } else if (row  < 3 * LED_MATRIX_HEIGHT / 4) {
+            cur_pattern[row].red = 3;
+            cur_pattern[row].green = 3;
+            cur_pattern[row].blue = 1;
+        } else {
+            cur_pattern[row].red = 4;
+            cur_pattern[row].green = 1;
+            cur_pattern[row].blue = 1;
+        }
+    }
 
     led_strip_clear(led_strip);
 }
 
-static bool printed = false;
-
-void draw_line(led_strip_handle_t *strip, uint16_t width, uint16_t height, uint16_t column_id, uint16_t column_height) {
-    if (column_id >= width || column_height > height) {
+void draw_line(
+  led_strip_handle_t *strip,
+  uint8_t col, uint8_t col_height,
+  color_t pattern[LED_MATRIX_HEIGHT]) {
+    if (col >= LED_MATRIX_WIDTH) {
         return;
     }
 
-    for (int row_id = 0; row_id < height; row_id++) {
-        int pixel_id = ((height - row_id - 1) * width) + (row_id % 2 ? (width - column_id - 1) : column_id);
-        if (row_id < column_height) {
-            if (row_id < 4) {
-                led_strip_set_pixel(*strip, pixel_id, 1, 4, 1);
-            } else if (row_id < 6) {
-                led_strip_set_pixel(*strip, pixel_id, 3, 3, 1);
-            } else {
-                led_strip_set_pixel(*strip, pixel_id, 4, 1, 1);
-            }
+    for (int row = 0; row < LED_MATRIX_HEIGHT; row++) {
+        int pixel = ((LED_MATRIX_HEIGHT - row - 1) * LED_MATRIX_WIDTH) + 
+                     (row % 2 ? (LED_MATRIX_WIDTH - col - 1) : col);
+        if (row < col_height) {
+            led_strip_set_pixel(*strip, pixel, pattern[row].red, pattern[row].green, pattern[row].blue);
         } else {
-            led_strip_set_pixel(*strip, pixel_id, 0, 0, 0);
+            led_strip_set_pixel(*strip, pixel, 0, 0, 0);
         }
     }
-    printed = true;
 }
 
 void configure_adc(adc_continuous_handle_t *handle) {
@@ -213,7 +234,9 @@ void mic_adc_task(void *arg) {
 }
 
 void fft_task(void *arg) {
-    float spectrum[16];
+    float spectrum[LED_MATRIX_WIDTH][FFT_SMOOTHING_DEPTH];
+    bzero(spectrum, LED_MATRIX_WIDTH*FFT_SMOOTHING_DEPTH*sizeof(float));
+    int last_spectrum = -1;
 
     esp_err_t r = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);
     if (r != ESP_OK) {
@@ -226,39 +249,85 @@ void fft_task(void *arg) {
 
     while (1) {
         if (pthread_mutex_lock(&mic_data_mutex) == 0) {
-            memcpy(fft_data, mic_data, MIC_ADC_READ_LEN*sizeof(int));
-            pthread_mutex_unlock(&mic_data_mutex);
-        }
-
-        for (int i = 0; i < MIC_ADC_READ_LEN; i++) {
-            y_cf[i*2 + 0] = (fft_data[i] / 1000.0) * window[i];
-            y_cf[i*2 + 1] = 0;
-        }
-
-        dsps_fft2r_fc32(y_cf, MIC_ADC_READ_LEN);
-
-        for (int i = 0; i < 16; i++) {
-            spectrum[i] = 0;
-        }
-
-        for (int i = 1 ; i < MIC_ADC_READ_LEN/2 ; i++) {
-            int index = ((float)i / (MIC_ADC_READ_LEN/2 + 1)) * 16;
-            float amp = y_cf[i * 2 + 0] * y_cf[i * 2 + 0] + y_cf[i * 2 + 1] * y_cf[i * 2 + 1];
-            if (amp > spectrum[index]) {
-                spectrum[index] = amp;
+            float avg = 0.0;
+            for (int i = 0; i < MIC_ADC_READ_LEN; i++) {
+                avg += fft_data[i];
             }
-        }
+            avg /= MIC_ADC_READ_LEN;
 
-        // ESP_LOGI(TAG, "spectrum: { %f, %f, %f, %f, %f, %f, %f, %f }",
-        //          spectrum[0], spectrum[1], spectrum[2], spectrum[3],
-        //          spectrum[4], spectrum[5], spectrum[6], spectrum[7]);
-    
+            memcpy(fft_data, mic_data, MIC_ADC_READ_LEN*sizeof(int));
+            last_spectrum += 1;
+            last_spectrum %= FFT_SMOOTHING_DEPTH;
+            pthread_mutex_unlock(&mic_data_mutex);
+        
+            for (int i = 0; i < MIC_ADC_READ_LEN; i++) {
+                y_cf[i*2 + 0] = ((fft_data[i] - avg) / 1000.0) * window[i];
+                y_cf[i*2 + 1] = 0;
+            }
 
-        for (int i = 0; i < 16; i++) {
-            int height = spectrum[i] / 128;
-            draw_line(&led_strip, 16, 8, i, height);
-        }
-        led_strip_refresh(led_strip);
+            dsps_fft2r_fc32(y_cf, MIC_ADC_READ_LEN);
+
+            for (int i = 0; i < LED_MATRIX_WIDTH; i++) {
+                spectrum[last_spectrum][i] = 0;
+            }
+
+            for (int i = 1.0; i < MIC_ADC_READ_LEN/2; i+=1.0) {
+                float freq = ((double)i / MIC_ADC_READ_LEN) * MIC_ADC_SAMPLING_FREQUENCY;
+                int index = 0;
+                if (freq < 50) {
+                    index = 0;
+                } else if (freq < 100) {
+                    index = 1;
+                } else if (freq < 200) {
+                    index = 2;
+                } else if (freq < 400) {
+                    index = 3;
+                } else if (freq < 600) {
+                    index = 4;
+                } else if (freq < 800) {
+                    index = 5;
+                } else if (freq < 1000) {
+                    index = 6;
+                } else if (freq < 2000) {
+                    index = 7;
+                } else if (freq < 4000) {
+                    index = 8;
+                } else if (freq < 6000) {
+                    index = 9;
+                } else if (freq < 8000) {
+                    index = 10;
+                } else if (freq < 10000) {
+                    index = 11;
+                } else if (freq < 12000) {
+                    index = 12;
+                } else if (freq < 14000) {
+                    index = 13;
+                } else if (freq < 16000) {
+                    index = 14;
+                } else {
+                    index = 15;
+                }
+                float amp = y_cf[i * 2 + 0] * y_cf[i * 2 + 0] + y_cf[i * 2 + 1] * y_cf[i * 2 + 1];
+                if (amp > spectrum[last_spectrum][index]) {
+                    spectrum[last_spectrum][index] = amp;
+                }
+            }
+
+            // ESP_LOGI(TAG, "spectrum: { %f, %f, %f, %f, %f, %f, %f, %f }",
+            //          spectrum[0], spectrum[1], spectrum[2], spectrum[3],
+            //          spectrum[4], spectrum[5], spectrum[6], spectrum[7]);
+
+            for (int col = 0; col < LED_MATRIX_WIDTH; col++) {
+                int height = 0;
+                for (int d = 0; d < FFT_SMOOTHING_DEPTH; d++) {
+                    height += spectrum[d][col];
+                }
+                height /= FFT_SMOOTHING_DEPTH;
+                draw_line(&led_strip, col, height, cur_pattern);
+            }
+            led_strip_refresh(led_strip);
+        } 
+        usleep(10*1000);
     }
 
     led_strip_clear(led_strip);
