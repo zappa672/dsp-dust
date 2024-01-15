@@ -39,7 +39,7 @@
 #define MIC_ADC_SAMPLING_FREQUENCY   20*1000 // 20kHz
 
 #define FFT_STACK_SIZE               8096
-#define FFT_SMOOTHING_DEPTH          4
+// #define FFT_SMOOTHING_DEPTH          4
 
 static const char *TAG = "dsp-dust";
 
@@ -61,8 +61,6 @@ static pthread_mutex_t mic_data_mutex;
 static int mic_data[MIC_ADC_READ_LEN];
 static int fft_data[MIC_ADC_READ_LEN];
 
-__attribute__((aligned(16)))
-float window[MIC_ADC_READ_LEN];
 __attribute__((aligned(16)))
 float y_cf[2*MIC_ADC_READ_LEN];
 
@@ -233,84 +231,73 @@ void mic_adc_task(void *arg) {
     ESP_ERROR_CHECK(adc_continuous_deinit(mic_adc_cont_handle));
 }
 
-void fft_task(void *arg) {
-    float spectrum[LED_MATRIX_WIDTH][FFT_SMOOTHING_DEPTH];
-    bzero(spectrum, LED_MATRIX_WIDTH*FFT_SMOOTHING_DEPTH*sizeof(float));
-    int last_spectrum = -1;
+// void print_array(const char* prefix, const float *values, size_t len) {
+//     char buffer[8*len + len];
+//     char value_buf[9];
+//     for (int i = 0; i < len; i++) {
+//         sprintf(value_buf, "%8f", values[i]);
+//         strcpy(&buffer[9*i], value_buf);
+//         buffer[9*(i+1) - 1] = ',';
+//     }
+//     buffer[8*len + len - 1] = 0;
+//     ESP_LOGI(TAG, "%s: [%s]", prefix, buffer);    
+// }
 
+void fft_task(void *arg) {
+    // float spectrum[LED_MATRIX_WIDTH][FFT_SMOOTHING_DEPTH];
+    // bzero(spectrum, LED_MATRIX_WIDTH*FFT_SMOOTHING_DEPTH*sizeof(float));
+    // int last_spectrum = -1;
+
+    float spectrum[LED_MATRIX_WIDTH];
+    bzero(spectrum, LED_MATRIX_WIDTH*sizeof(float));
+    
     esp_err_t r = dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE);
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "Not possible to initialize FFT. Error = %i", r);
         return;
     }
 
-    // Generate hann window
-    dsps_wind_hann_f32(window, MIC_ADC_READ_LEN);
-
     while (1) {
-        if (pthread_mutex_lock(&mic_data_mutex) == 0) {
+        if (pthread_mutex_lock(&mic_data_mutex) == 0) {            
+            memcpy(fft_data, mic_data, MIC_ADC_READ_LEN*sizeof(int));
+            pthread_mutex_unlock(&mic_data_mutex);
+
+            // last_spectrum += 1;
+            // last_spectrum %= FFT_SMOOTHING_DEPTH;
+            
             float avg = 0.0;
             for (int i = 0; i < MIC_ADC_READ_LEN; i++) {
                 avg += fft_data[i];
             }
             avg /= MIC_ADC_READ_LEN;
 
-            memcpy(fft_data, mic_data, MIC_ADC_READ_LEN*sizeof(int));
-            last_spectrum += 1;
-            last_spectrum %= FFT_SMOOTHING_DEPTH;
-            pthread_mutex_unlock(&mic_data_mutex);
-        
+
             for (int i = 0; i < MIC_ADC_READ_LEN; i++) {
-                y_cf[i*2 + 0] = ((fft_data[i] - avg) / 1000.0) * window[i];
+                y_cf[i*2 + 0] = ((fft_data[i] - avg) / 1000.0);
                 y_cf[i*2 + 1] = 0;
             }
 
+            // print_array("adc_data", y_cf, 2*MIC_ADC_READ_LEN);
+
             dsps_fft2r_fc32(y_cf, MIC_ADC_READ_LEN);
+            dsps_bit_rev_fc32(y_cf, MIC_ADC_READ_LEN);
+
+            // print_array("fft_data", y_cf, 2*MIC_ADC_READ_LEN);
 
             for (int i = 0; i < LED_MATRIX_WIDTH; i++) {
-                spectrum[last_spectrum][i] = 0;
+                // spectrum[last_spectrum][i] = 0;
+                spectrum[i] = 0;
             }
 
-            for (int i = 1.0; i < MIC_ADC_READ_LEN/2; i+=1.0) {
-                float freq = ((double)i / MIC_ADC_READ_LEN) * MIC_ADC_SAMPLING_FREQUENCY;
-                int index = 0;
-                if (freq < 50) {
-                    index = 0;
-                } else if (freq < 100) {
-                    index = 1;
-                } else if (freq < 200) {
-                    index = 2;
-                } else if (freq < 400) {
-                    index = 3;
-                } else if (freq < 600) {
-                    index = 4;
-                } else if (freq < 800) {
-                    index = 5;
-                } else if (freq < 1000) {
-                    index = 6;
-                } else if (freq < 2000) {
-                    index = 7;
-                } else if (freq < 4000) {
-                    index = 8;
-                } else if (freq < 6000) {
-                    index = 9;
-                } else if (freq < 8000) {
-                    index = 10;
-                } else if (freq < 10000) {
-                    index = 11;
-                } else if (freq < 12000) {
-                    index = 12;
-                } else if (freq < 14000) {
-                    index = 13;
-                } else if (freq < 16000) {
-                    index = 14;
-                } else {
-                    index = 15;
-                }
+            for (int i = 1; i < MIC_ADC_READ_LEN/2; i+=1.0) {
+                int index = (i*LED_MATRIX_WIDTH) / (MIC_ADC_READ_LEN/2);
                 float amp = y_cf[i * 2 + 0] * y_cf[i * 2 + 0] + y_cf[i * 2 + 1] * y_cf[i * 2 + 1];
-                if (amp > spectrum[last_spectrum][index]) {
-                    spectrum[last_spectrum][index] = amp;
-                }
+                amp /= 8;
+                // amp *= 8;
+                // if (amp > spectrum[last_spectrum][index]) {
+                //     spectrum[last_spectrum][index] = amp;
+                // }
+                spectrum[index] = amp;
             }
 
             // ESP_LOGI(TAG, "spectrum: { %f, %f, %f, %f, %f, %f, %f, %f }",
@@ -319,10 +306,11 @@ void fft_task(void *arg) {
 
             for (int col = 0; col < LED_MATRIX_WIDTH; col++) {
                 int height = 0;
-                for (int d = 0; d < FFT_SMOOTHING_DEPTH; d++) {
-                    height += spectrum[d][col];
-                }
-                height /= FFT_SMOOTHING_DEPTH;
+                // for (int d = 0; d < FFT_SMOOTHING_DEPTH; d++) {
+                //     height += spectrum[d][col];
+                // }
+                // height /= FFT_SMOOTHING_DEPTH;
+                height = spectrum[col];
                 draw_line(&led_strip, col, height, cur_pattern);
             }
             led_strip_refresh(led_strip);
