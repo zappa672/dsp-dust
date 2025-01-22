@@ -9,6 +9,7 @@
 
 #include "driver/uart.h"
 #include "driver/gpio.h"
+#include "driver/i2c_master.h"
 
 #include "soc/soc_caps.h"
 
@@ -37,7 +38,7 @@
 #define POT_ADC_BITWIDTH             SOC_ADC_DIGI_MAX_BITWIDTH
 
 #define LED_MATRIX_GPIO              17
-#define LED_MATRIX_WIDTH             24
+#define LED_MATRIX_WIDTH             16
 #define LED_MATRIX_HEIGHT            16
 #define LED_MATRIX_RMT_RESOLUTION_HZ 10 * 1000 * 1000 // 10MHz
 
@@ -208,10 +209,11 @@ void draw_line(
     }
 
     float amp = bright_raw / 4095.0;
-
+    
     for (int row = 0; row < LED_MATRIX_HEIGHT; row++) {
-        int pixel = ((LED_MATRIX_HEIGHT - row - 1) * LED_MATRIX_WIDTH) + 
-                     (row % 2 ? (LED_MATRIX_WIDTH - col - 1) : col);
+        // int pixel = ((LED_MATRIX_HEIGHT - row - 1) * LED_MATRIX_WIDTH) + 
+        //              (row % 2 ? (LED_MATRIX_WIDTH - col - 1) : col);
+        int pixel = (col * LED_MATRIX_HEIGHT) + (col % 2 ? row : LED_MATRIX_HEIGHT - row);
         if (row < col_height) {
             led_strip_set_pixel(*strip, pixel, (int)(amp*pattern[row].red), (int)(amp*pattern[row].green), (int)(amp*pattern[row].blue));
         } else {
@@ -367,7 +369,7 @@ void fft_task(void *arg) {
 
 void app_main(void) {
     if (pthread_mutex_init(&mic_data_mutex, NULL) != 0) {
-        ESP_LOGI(TAG, "Failed to initialize the spiffs mutex");
+        ESP_LOGI(TAG, "Failed to initialize mutex");
     }
 
     // configure_buttons();
