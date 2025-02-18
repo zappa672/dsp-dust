@@ -4,6 +4,7 @@
 #include "pot.h"
 
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -14,10 +15,12 @@
 #include "esp_log.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "esp_adc/adc_continuous.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_dsp.h"
 
 
+static pthread_mutex_t mic_data_mutex;
 
 static adc_continuous_handle_t mic_adc_cont_handle;
 
@@ -26,9 +29,12 @@ static TaskHandle_t mic_adc_conv_task_handle;
 __attribute__((aligned(16)))
 float y_cf[2*MIC_ADC_READ_LEN];
 
-
 static int mic_data[MIC_ADC_READ_LEN];
 static int fft_data[MIC_ADC_READ_LEN];
+
+
+static float spectrum[LED_MATRIX_WIDTH];
+
 
 // void print_array(const char* prefix, const float *values, size_t len) {
 //     char buffer[8*len + len];
@@ -43,6 +49,10 @@ static int fft_data[MIC_ADC_READ_LEN];
 // }
 
 void configure_mic_adc() {
+    if (pthread_mutex_init(&mic_data_mutex, NULL) != 0) {
+        ESP_LOGI(TAG, "Failed to initialize mutex");
+    }
+
     adc_continuous_handle_cfg_t adc_config = {
         .max_store_buf_size = 2*MIC_ADC_READ_LEN*SOC_ADC_DIGI_RESULT_BYTES,
         .conv_frame_size = MIC_ADC_READ_LEN*SOC_ADC_DIGI_RESULT_BYTES,
@@ -104,7 +114,6 @@ void mic_adc_task(void *arg) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         while (1) {
-            ESP_LOGI(TAG, "mic_adc_task step");
             ret = adc_continuous_read(mic_adc_cont_handle, result, MIC_ADC_READ_LEN*SOC_ADC_DIGI_RESULT_BYTES, &ret_num, 0);
             if (ret == ESP_OK) {
                 if (pthread_mutex_lock(&mic_data_mutex) == 0) {
@@ -114,7 +123,7 @@ void mic_adc_task(void *arg) {
                     }
                     pthread_mutex_unlock(&mic_data_mutex);
                 }
-                vTaskDelay(1);
+                usleep(10*1000);
             } else if (ret == ESP_ERR_TIMEOUT) {
                 break;
             }
@@ -137,8 +146,7 @@ void fft_task(void *arg) {
     }
 
     while (1) {
-        if (pthread_mutex_lock(&mic_data_mutex) == 0) {
-            ESP_LOGI(TAG, "fft_task step");            
+        if (pthread_mutex_lock(&mic_data_mutex) == 0) {      
             memcpy(fft_data, mic_data, MIC_ADC_READ_LEN*sizeof(int));
             pthread_mutex_unlock(&mic_data_mutex);
 
@@ -164,9 +172,7 @@ void fft_task(void *arg) {
                 spectrum[i-skip] = 0.95 * spectrum[i-skip] + 0.05* amp;
             }
 
-            ESP_LOGI(TAG, "gain %d, bright %d", gain_raw, bright_raw);
-
-            float mul = 10/4095.0 + (gain_raw/4095.0)*(20/4095.0);
+            float mul = (10 + (gain()/4095.0)*100) / 4095.0;
                 
             for (int col = 0; col < LED_MATRIX_WIDTH; col++) {
                 int height = (int)(mul*spectrum[col]);
@@ -174,7 +180,6 @@ void fft_task(void *arg) {
             }
             led_strip_refresh(led_strip);
         } else {
-            ESP_LOGI(TAG, "fft_task skip");
             usleep(10*1000);
         }
     }
@@ -225,12 +230,12 @@ void draw_line(
         return;
     }
 
-    float amp = bright_raw / 4095.0;
+    float amp = bright() / 4095.0;
     
     for (int row = 0; row < LED_MATRIX_HEIGHT; row++) {
         // int pixel = ((LED_MATRIX_HEIGHT - row - 1) * LED_MATRIX_WIDTH) + 
         //              (row % 2 ? (LED_MATRIX_WIDTH - col - 1) : col);
-        int pixel = (col * LED_MATRIX_HEIGHT) + (col % 2 ? row : LED_MATRIX_HEIGHT - row);
+        int pixel = (col * LED_MATRIX_HEIGHT) + (col % 2 ? row : LED_MATRIX_HEIGHT - row - 1);
         if (row < col_height) {
             led_strip_set_pixel(*strip, pixel, (int)(amp*pattern[row].red), (int)(amp*pattern[row].green), (int)(amp*pattern[row].blue));
         } else {
