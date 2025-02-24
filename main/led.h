@@ -2,6 +2,10 @@
 
 #include "led_strip.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define LED_MATRIX_GPIO              17
 #define LED_MATRIX_WIDTH             16
 #define LED_MATRIX_HEIGHT            16
@@ -23,3 +27,7 @@ void draw_line(
   led_strip_handle_t *strip,
   uint8_t col, uint8_t col_height,
   color_t pattern[LED_MATRIX_HEIGHT]);
+
+#ifdef __cplusplus
+}
+#endif

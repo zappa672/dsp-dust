@@ -1,16 +1,12 @@
-#include "common.h"
-#include "led.h"
 #include "mic.h"
-#include "pot.h"
 
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "driver/uart.h"
 #include "driver/gpio.h"
-#include "driver/i2c_master.h"
+#include "driver/uart.h"
 
 #include "esp_log.h"
 #include "esp_adc/adc_cali.h"
@@ -18,6 +14,10 @@
 #include "esp_adc/adc_continuous.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_dsp.h"
+
+#include "common.h"
+#include "led.h"
+#include "pot.h"
 
 
 static pthread_mutex_t mic_data_mutex;
@@ -169,10 +169,10 @@ void fft_task(void *arg) {
             int skip = 6;
             for (int i = skip; i < LED_MATRIX_WIDTH+skip; i++) {
                 float amp = sqrt(y_cf[i * 2 + 0] * y_cf[i * 2 + 0] + y_cf[i * 2 + 1] * y_cf[i * 2 + 1]);
-                spectrum[i-skip] = 0.95 * spectrum[i-skip] + 0.05* amp;
+                spectrum[i-skip] = 0.96 * spectrum[i-skip] + 0.04* amp;
             }
 
-            float mul = (10 + (gain()/4095.0)*100) / 4095.0;
+            float mul = (10 + (gain()/4095.0)*500) / 4095.0;
                 
             for (int col = 0; col < LED_MATRIX_WIDTH; col++) {
                 int height = (int)(mul*spectrum[col]);

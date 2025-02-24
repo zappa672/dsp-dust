@@ -1,4 +1,3 @@
-#include "common.h"
 #include "pot.h"
 
 #include <unistd.h>
@@ -7,6 +6,8 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
+
+#include "common.h"
 
 
 #define POT_ADC_ATTEN                ADC_ATTEN_DB_11
@@ -23,6 +24,29 @@ static adc_oneshot_unit_handle_t pot_adc_handle;
 static int gain_raw, gain_voltage;
 static int bright_raw, bright_voltage;
 
+void read_values() {
+    int raw, voltage;
+
+    ESP_ERROR_CHECK(adc_oneshot_read(pot_adc_handle, POT_GAIN_ADC_CHANNEL, &raw));
+    ESP_ERROR_CHECK(adc_cali_raw_to_voltage(pot_adc_cali_handle, raw, &voltage));
+
+    gain_raw = raw;
+    gain_voltage = voltage;
+
+    // gain_raw = 0.95*gain_raw + 0.05*raw;
+    // gain_voltage = 0.95*gain_voltage + 0.05*voltage;
+
+    ESP_ERROR_CHECK(adc_oneshot_read(pot_adc_handle, POT_BRIGHT_ADC_CHANNEL, &raw));
+    ESP_ERROR_CHECK(adc_cali_raw_to_voltage(pot_adc_cali_handle, raw, &voltage));
+
+    bright_raw = raw;
+    bright_voltage = voltage;
+
+    // bright_raw = 0.5*bright_raw + 0.5*raw;
+    // bright_voltage = 0.5*bright_voltage + 0.5*voltage;
+
+    ESP_LOGD(TAG, "raw gain: %d, bright: %d, calibrated: %d, %d", gain_raw, bright_raw, gain_voltage, bright_voltage);
+}
 
 void configure_pot_adc() {
     ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
@@ -46,29 +70,15 @@ void configure_pot_adc() {
     };
     ESP_ERROR_CHECK(adc_oneshot_config_channel(pot_adc_handle, POT_GAIN_ADC_CHANNEL, &oneshot_chan_config));
     ESP_ERROR_CHECK(adc_oneshot_config_channel(pot_adc_handle, POT_BRIGHT_ADC_CHANNEL, &oneshot_chan_config));
+
+    read_values();
 }
 
 void pot_read_task(void *arg) {
-    int raw, voltage;
-
     ESP_LOGI(TAG, "pot_read_task started");
 
     for (;;) {
-        ESP_ERROR_CHECK(adc_oneshot_read(pot_adc_handle, POT_GAIN_ADC_CHANNEL, &raw));
-        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(pot_adc_cali_handle, raw, &voltage));
-
-        gain_raw = 0.95*gain_raw + 0.05*raw;
-        
-        gain_voltage = 0.95*gain_voltage + 0.05*voltage;
-        
-        ESP_ERROR_CHECK(adc_oneshot_read(pot_adc_handle, POT_BRIGHT_ADC_CHANNEL, &raw));
-        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(pot_adc_cali_handle, raw, &voltage));
-
-        bright_raw = 0.5*bright_raw + 0.5*raw;
-        bright_voltage = 0.5*bright_voltage + 0.5*voltage;
-
-        // ESP_LOGI(TAG, "raw gain: %d, bright: %d, calibrated: %d, %d", gain_raw, bright_raw, gain_voltage, bright_voltage);
-
+        read_values();
         usleep(200 * 1000);
     }
 

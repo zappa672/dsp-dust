@@ -1,11 +1,11 @@
-#include "ina.h"
+#include "i2c0.h"
 
 #include <string.h>
 #include <unistd.h>
 
 #include "esp_log.h"
-#include <driver/i2c_master.h>
-#include <soc/i2c_reg.h>
+#include "driver/i2c_master.h"
+#include "soc/i2c_reg.h"
 
 #include "common.h"
 
@@ -26,17 +26,13 @@
 #define INA219_ADDR_SCL_SDA 0x4e //!< I2C address, A1 pin - SCL, A0 pin - SDA
 #define INA219_ADDR_SCL_SCL 0x4f //!< I2C address, A1 pin - SCL, A0 pin - SCL
 
-/**
- * Bus voltage range
- */
+/* Bus voltage range */
 typedef enum {
     INA219_BUS_RANGE_16V = 0, //!< 16V FSR
     INA219_BUS_RANGE_32V      //!< 32V FSR (default)
 } ina219_bus_voltage_range_t;
 
-/**
- * PGA gain for shunt voltage
- */
+/* PGA gain for shunt voltage */
 typedef enum {
     INA219_GAIN_1 = 0, //!< Gain: 1, Range: +-40 mV
     INA219_GAIN_0_5,   //!< Gain: 1/2, Range: +-80 mV
@@ -44,9 +40,7 @@ typedef enum {
     INA219_GAIN_0_125  //!< Gain: 1/8, Range: +-320 mV (default)
 } ina219_gain_t;
 
-/**
- * ADC resolution/averaging
- */
+/* ADC resolution/averaging */
 typedef enum {
     INA219_RES_9BIT_1S    = 0,  //!< 9 bit, 1 sample, conversion time 84 us
     INA219_RES_10BIT_1S   = 1,  //!< 10 bit, 1 sample, conversion time 148 us
@@ -61,9 +55,7 @@ typedef enum {
     INA219_RES_12BIT_128S = 15, //!< 12 bit, 128 samples, conversion time 68.1 ms
 } ina219_resolution_t;
 
-/**
- * Operating mode
- */
+/* Operating mode */
 typedef enum {
     INA219_MODE_POWER_DOWN = 0, //!< Power-done
     INA219_MODE_TRIG_SHUNT,     //!< Shunt voltage, triggered
@@ -75,19 +67,29 @@ typedef enum {
     INA219_MODE_CONT_SHUNT_BUS  //!< Shunt and bus, continuous (default)
 } ina219_mode_t;
 
+/* I2C register addresses */
+typedef enum {
+    INA219_I2C_REG_CONFIG = 0,
+    INA219_I2C_REG_SHUNT_U = 1,
+    INA219_I2C_REG_BUS_U = 2,
+    INA219_I2C_REG_POWER = 3,
+    INA219_I2C_REG_CURRENT = 4,
+    INA219_I2C_REG_CALIBRATION = 5,
+} ina219_reg_t;
+
 #define I2C_FREQ_HZ 1000000 // Max 1 MHz for esp-idf, but supports up to 2.56 MHz
 
-#define I2C_REG_CONFIG      0
-#define I2C_REG_SHUNT_U     1
-#define I2C_REG_BUS_U       2
-#define I2C_REG_POWER       3
-#define I2C_REG_CURRENT     4
-#define I2C_REG_CALIBRATION 5
 
+typedef enum {
+    DSP_DUST_INA_PWR = 0,
+    DSP_DUST_INA_CHRG = 1,
+    DSP_DUST_INA_DCHG = 2,
+    DSP_DUST_INA_STB = 3,
+    DSP_DUST_INA_CNT = 4
+} dsp_dust_ina_t;
 
 /* Device descriptor */
-static const i2c_port_t port = 0;
-static const uint8_t addrs[4] = {
+static const uint8_t addrs[DSP_DUST_INA_CNT] = {
     INA219_ADDR_GND_GND,
     INA219_ADDR_GND_VS,
     INA219_ADDR_VS_GND,
@@ -95,31 +97,32 @@ static const uint8_t addrs[4] = {
 };
 
 static i2c_master_bus_handle_t i2c_bus;
-static i2c_master_dev_handle_t *i2c_devs[4];
+static i2c_master_dev_handle_t *i2c_devs[DSP_DUST_INA_CNT];
 
-// static uint16_t ina219_cfg;
+static uint8_t read_buffer[2];
 
-static esp_err_t i2c_setup_port()
+#define INA219_I2C_TIMEOUT_MS (50)
+
+
+esp_err_t i2c_0_init(void)
 {
-    ESP_LOGI(TAG, "i2c_setup_port: %d", port);
-
+    esp_err_t res;
     i2c_master_bus_config_t i2c_cfg;
+    
+    ESP_LOGI(TAG, "ina219_i2c_init");
+
     memset(&i2c_cfg, 0, sizeof(i2c_master_bus_config_t));
     i2c_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    i2c_cfg.i2c_port = port;
+    i2c_cfg.i2c_port = I2C_NUM_0;
     i2c_cfg.scl_io_num = GPIO_NUM_22;
     i2c_cfg.sda_io_num = GPIO_NUM_21;
     i2c_cfg.glitch_ignore_cnt = 7;
     i2c_cfg.flags.enable_internal_pullup = true;
-    
-    ESP_LOGI(TAG, "i2c_setup_port: %d", port);
 
     ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_cfg, &i2c_bus));
 
-    ESP_LOGI(TAG, "i2c_setup_port: %d", port);
-
-    for (int i = 0; i < 4; i++) {
-        esp_err_t res = i2c_master_probe(i2c_bus, addrs[i], I2C_TIME_OUT_REG_V);
+    for (int i = 0; i < DSP_DUST_INA_CNT; i++) {
+        res = i2c_master_probe(i2c_bus, addrs[i], I2C_TIME_OUT_REG_V);
 
         if (res == ESP_OK) {
             ESP_LOGI(TAG, "Found device at addr 0x%02x", addrs[i]);
@@ -132,6 +135,15 @@ static esp_err_t i2c_setup_port()
 
             i2c_devs[i] = malloc(sizeof(i2c_master_dev_handle_t));
             ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_bus, &dev_cfg, i2c_devs[i]));
+
+            ESP_ERROR_CHECK(i2c_master_receive(*i2c_devs[i], read_buffer, 2, -1));
+
+            uint8_t data_addr = INA219_I2C_REG_CONFIG;
+            ESP_ERROR_CHECK(i2c_master_transmit_receive(*i2c_devs[i], &data_addr, 1, read_buffer, 2, INA219_I2C_TIMEOUT_MS));
+
+            ESP_LOGI(TAG, "0x%02x cfg 0x%02x 0x%02x", addrs[i], read_buffer[0], read_buffer[1]);
+
+            // EPS_ERROR_CHECK();
         } else {
             i2c_devs[i] = NULL;
             ESP_LOGI(TAG, "Not found device at addr 0x%02x", addrs[i]);
@@ -141,92 +153,34 @@ static esp_err_t i2c_setup_port()
     return ESP_OK;
 }
 
-// esp_err_t i2c_dev_read(const void *out_data, size_t out_size, void *in_data, size_t in_size)
-// {
-//     if (!in_data || !in_size) {
-//         return ESP_ERR_INVALID_ARG;
-//     }
-
-//     esp_err_t res = i2c_setup_port();
-//     if (res != ESP_OK) {
-//         return res;
-//     }
-
-//     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-//     if (out_data && out_size)
-//     {
-//         i2c_master_start(cmd);
-//         i2c_master_write_byte(cmd, addrs[0] << 1, true);
-//         i2c_master_write(cmd, (void *)out_data, out_size, true);
-//     }
-//     i2c_master_start(cmd);
-//     i2c_master_write_byte(cmd, (addrs[0] << 1) | 1, true);
-//     i2c_master_read(cmd, in_data, in_size, I2C_MASTER_LAST_NACK);
-//     i2c_master_stop(cmd);
-
-//     res = i2c_master_cmd_begin(port, cmd, I2C_TIME_OUT_REG_V);
-//     if (res != ESP_OK)
-//         ESP_LOGE(TAG, "Could not read from device [0x%02x at %d]: %d", addrs[0], port, res);
-
-//     i2c_cmd_link_delete(cmd);
-//     return res;
-// }
-
-// inline esp_err_t i2c_dev_read_reg(uint8_t reg, void *in_data, size_t in_size)
-// {
-//     return i2c_dev_read(&reg, 1, in_data, in_size);
-// }
-
-// static esp_err_t read_reg_16(uint8_t reg, uint16_t *val)
-// {
-//     if (!val) return ESP_ERR_INVALID_ARG; 
-    
-//     esp_err_t r = i2c_dev_read_reg(reg, val, 2);
-//     if (r != ESP_OK) {
-//         return r;
-//     }
-
-//     *val = (*val >> 8) | (*val << 8);
-
-//     return ESP_OK;
-// }
-
-void configure_ina_i2c() {
-  esp_err_t res;
-
-  res = i2c_setup_port();
-  if (res != ESP_OK) { 
-    return;
-  }
-  
-//   ESP_LOGD(TAG, "Reading ina219 config %d", port);
-
-//   res = read_reg_16(I2C_REG_CONFIG, &ina219_cfg);
-//   if (res != ESP_OK) { 
-//     return;
-//   }
-  
-//   ESP_LOGD(TAG, "Ina219 config: 0x%04x", ina219_cfg);
+void i2c_0_clean(void) {
+    // i2c_master_bus_rm_device() or i2c_del_master_bus()
 }
 
-void ina_read_task(void *arg) {
+void i2c_0_task(void *arg) {
+  uint8_t data_addr;
+  uint16_t raw;
+
   while (true)
   {
+    // for (int i = 0; i < 4; i++) {
+    //     data_addr = INA219_I2C_REG_SHUNT_U;
+    //     ESP_ERROR_CHECK(i2c_master_transmit_receive(*i2c_devs[i], &data_addr, 1, read_buffer, 2, INA219_I2C_TIMEOUT_MS));
+
+    //     raw = (read_buffer[0] << 8) + read_buffer[1];
+    //     raw = (raw >> 8) | (raw << 8);
+
+    //     // ESP_LOGI(TAG, "0x%02x shunt U %f", addrs[i], raw / 100000.0);
+
+    //     data_addr = INA219_I2C_REG_SHUNT_U;
+    //     ESP_ERROR_CHECK(i2c_master_transmit_receive(*i2c_devs[i], &data_addr, 1, read_buffer, 2, INA219_I2C_TIMEOUT_MS));
+
+    //     raw = (read_buffer[0] << 8) + read_buffer[1];
+    //     raw = (raw >> 8) | (raw << 8);
+
+    //     // ESP_LOGI(TAG, "0x%02x bus U %f", addrs[i], (raw >> 3) * 0.004);
+    // }
+    
     usleep(1000*1000);
   }
-  
-  // // Read register 0 to get the current value
-  // i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-  
-  // i2c_master_start(cmd);
-  // i2c_master_write_byte(cmd, 0, ACK_CHECK_EN);
-  // i2c_master_read_byte(cmd, &current, ACK_VAL);
-  // i2c_master_stop(cmd);
-  
-  // i2c_cmd_link_perform(I2C_NUM_0, cmd);
-  // // Process the register value to get the current
-  // int16_t current = (current << 8);
-  
-  // // Update the current value
-  // Serial.println(current);
 }
