@@ -2,6 +2,8 @@
 
 #include "led_strip.h"
 
+#include "color.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -11,15 +13,8 @@ extern "C" {
 #define LED_MATRIX_HEIGHT            16
 #define LED_MATRIX_RMT_RESOLUTION_HZ 10 * 1000 * 1000 // 10MHz
 
-typedef struct color {
-    uint8_t red;
-    uint8_t green;
-    uint8_t blue; 
-} color_t;
-
 static color_t cur_pattern[LED_MATRIX_HEIGHT];
 static led_strip_handle_t led_strip;
-
 
 void configure_led(void);
 

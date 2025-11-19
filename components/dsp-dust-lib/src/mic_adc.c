@@ -1,4 +1,7 @@
-#include "mic.h"
+#include "../include/common.h"
+#include "../include/led_mat.h"
+#include "../include/mic_adc.h"
+#include "../include/pot_adc.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -15,9 +18,6 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_dsp.h"
 
-#include "common.h"
-#include "led.h"
-#include "pot.h"
 
 
 static pthread_mutex_t mic_data_mutex;
@@ -168,7 +168,7 @@ void fft_task(void *arg) {
 
             int skip = 6;
             for (int i = skip; i < LED_MATRIX_WIDTH+skip; i++) {
-                float amp = sqrt(y_cf[i * 2 + 0] * y_cf[i * 2 + 0] + y_cf[i * 2 + 1] * y_cf[i * 2 + 1]);
+                float amp = sqrt(pow(y_cf[2*i], 2) + pow(y_cf[2*i+1], 2));
                 spectrum[i-skip] = 0.96 * spectrum[i-skip] + 0.04* amp;
             }
 
@@ -203,20 +203,17 @@ void configure_led(void) {
         led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip)
     );
 
+    color_t level_colors[3] = {{4, 16, 4}, {16, 16, 4}, {16, 4, 4}};
     for (int row = 0; row < LED_MATRIX_HEIGHT; row++) {
+        unsigned short level;
         if (row < LED_MATRIX_HEIGHT / 2) {
-            cur_pattern[row].red = 4;
-            cur_pattern[row].green = 16;
-            cur_pattern[row].blue = 4;
+            level = 0;
         } else if (row  < 3 * LED_MATRIX_HEIGHT / 4) {
-            cur_pattern[row].red = 16;
-            cur_pattern[row].green = 16;
-            cur_pattern[row].blue = 4;
+            level = 1;
         } else {
-            cur_pattern[row].red = 16;
-            cur_pattern[row].green = 4;
-            cur_pattern[row].blue = 4;
+            level = 2;
         }
+        cur_pattern[row] = level_colors[level];
     }
 
     led_strip_clear(led_strip);
@@ -237,7 +234,8 @@ void draw_line(
         //              (row % 2 ? (LED_MATRIX_WIDTH - col - 1) : col);
         int pixel = (col * LED_MATRIX_HEIGHT) + (col % 2 ? row : LED_MATRIX_HEIGHT - row - 1);
         if (row < col_height) {
-            led_strip_set_pixel(*strip, pixel, (int)(amp*pattern[row].red), (int)(amp*pattern[row].green), (int)(amp*pattern[row].blue));
+            color_t c = pattern[row];
+            led_strip_set_pixel(*strip, pixel, (int)(amp*c.r), (int)(amp*c.g), (int)(amp*c.b));
         } else {
             led_strip_set_pixel(*strip, pixel, 0, 0, 0);
         }

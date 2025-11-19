@@ -4,7 +4,7 @@
 extern "C" {
 #endif
 
-#define POT_TASK_STACK_SIZE          2048
+#define POT_TASK_STACK_SIZE 2048
 
 void configure_pot_adc();
 

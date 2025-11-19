@@ -1,13 +1,8 @@
-#include "i2c0.h"
+#pragma once
 
-#include <string.h>
-#include <unistd.h>
-
-#include "esp_log.h"
-#include "driver/i2c_master.h"
-#include "soc/i2c_reg.h"
-
-#include "common.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define INA219_ADDR_GND_GND 0x40 //!< I2C address, A1 pin - GND, A0 pin - GND
 #define INA219_ADDR_GND_VS  0x41 //!< I2C address, A1 pin - GND, A0 pin - VS+
@@ -88,99 +83,8 @@ typedef enum {
     DSP_DUST_INA_CNT = 4
 } dsp_dust_ina_t;
 
-/* Device descriptor */
-static const uint8_t addrs[DSP_DUST_INA_CNT] = {
-    INA219_ADDR_GND_GND,
-    INA219_ADDR_GND_VS,
-    INA219_ADDR_VS_GND,
-    INA219_ADDR_VS_VS,
-};
-
-static i2c_master_bus_handle_t i2c_bus;
-static i2c_master_dev_handle_t *i2c_devs[DSP_DUST_INA_CNT];
-
-static uint8_t read_buffer[2];
-
 #define INA219_I2C_TIMEOUT_MS (50)
 
-
-esp_err_t i2c_0_init(void)
-{
-    esp_err_t res;
-    i2c_master_bus_config_t i2c_cfg;
-    
-    ESP_LOGI(TAG, "ina219_i2c_init");
-
-    memset(&i2c_cfg, 0, sizeof(i2c_master_bus_config_t));
-    i2c_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    i2c_cfg.i2c_port = I2C_NUM_0;
-    i2c_cfg.scl_io_num = GPIO_NUM_22;
-    i2c_cfg.sda_io_num = GPIO_NUM_21;
-    i2c_cfg.glitch_ignore_cnt = 7;
-    i2c_cfg.flags.enable_internal_pullup = true;
-
-    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_cfg, &i2c_bus));
-
-    for (int i = 0; i < DSP_DUST_INA_CNT; i++) {
-        res = i2c_master_probe(i2c_bus, addrs[i], I2C_TIME_OUT_REG_V);
-
-        if (res == ESP_OK) {
-            ESP_LOGI(TAG, "Found device at addr 0x%02x", addrs[i]);
-            
-            i2c_device_config_t dev_cfg = {
-                .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-                .device_address = addrs[i],
-                .scl_speed_hz = I2C_FREQ_HZ,
-            };
-
-            i2c_devs[i] = malloc(sizeof(i2c_master_dev_handle_t));
-            ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_bus, &dev_cfg, i2c_devs[i]));
-
-            ESP_ERROR_CHECK(i2c_master_receive(*i2c_devs[i], read_buffer, 2, -1));
-
-            uint8_t data_addr = INA219_I2C_REG_CONFIG;
-            ESP_ERROR_CHECK(i2c_master_transmit_receive(*i2c_devs[i], &data_addr, 1, read_buffer, 2, INA219_I2C_TIMEOUT_MS));
-
-            ESP_LOGI(TAG, "0x%02x cfg 0x%02x 0x%02x", addrs[i], read_buffer[0], read_buffer[1]);
-
-            // EPS_ERROR_CHECK();
-        } else {
-            i2c_devs[i] = NULL;
-            ESP_LOGI(TAG, "Not found device at addr 0x%02x", addrs[i]);
-        }
-    }
-
-    return ESP_OK;
+#ifdef __cplusplus
 }
-
-void i2c_0_clean(void) {
-    // i2c_master_bus_rm_device() or i2c_del_master_bus()
-}
-
-void i2c_0_task(void *arg) {
-  uint8_t data_addr;
-  uint16_t raw;
-
-  while (true)
-  {
-    // for (int i = 0; i < 4; i++) {
-    //     data_addr = INA219_I2C_REG_SHUNT_U;
-    //     ESP_ERROR_CHECK(i2c_master_transmit_receive(*i2c_devs[i], &data_addr, 1, read_buffer, 2, INA219_I2C_TIMEOUT_MS));
-
-    //     raw = (read_buffer[0] << 8) + read_buffer[1];
-    //     raw = (raw >> 8) | (raw << 8);
-
-    //     // ESP_LOGI(TAG, "0x%02x shunt U %f", addrs[i], raw / 100000.0);
-
-    //     data_addr = INA219_I2C_REG_SHUNT_U;
-    //     ESP_ERROR_CHECK(i2c_master_transmit_receive(*i2c_devs[i], &data_addr, 1, read_buffer, 2, INA219_I2C_TIMEOUT_MS));
-
-    //     raw = (read_buffer[0] << 8) + read_buffer[1];
-    //     raw = (raw >> 8) | (raw << 8);
-
-    //     // ESP_LOGI(TAG, "0x%02x bus U %f", addrs[i], (raw >> 3) * 0.004);
-    // }
-    
-    usleep(1000*1000);
-  }
-}
+#endif
